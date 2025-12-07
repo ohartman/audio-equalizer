@@ -59,6 +59,7 @@
           const [showSettings, setShowSettings] = useState(false);
           const [audioFile, setAudioFile] = useState(null);
           const [smoothing, setSmoothing] = useState(0.8);
+          const [eqBands, setEqBands] = useState([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // 10 EQ bands
 
           const canvasRef = useRef(null);
           const audioContextRef = useRef(null);
@@ -68,8 +69,12 @@
           const animationRef = useRef(null);
           const audioElementRef = useRef(null);
           const streamRef = useRef(null);
+          const filtersRef = useRef([]);
 
           const FREQ_BANDS = 32;
+          
+          // EQ frequency bands (Hz)
+          const EQ_FREQUENCIES = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
           const themes = {
             neon: {
@@ -153,7 +158,52 @@
               analyserRef.current.smoothingTimeConstant = smoothing;
               const bufferLength = analyserRef.current.frequencyBinCount;
               dataArrayRef.current = new Uint8Array(bufferLength);
+              
+              // Create EQ filters
+              createEQFilters();
             }
+          };
+
+          const createEQFilters = () => {
+            filtersRef.current = EQ_FREQUENCIES.map((freq, index) => {
+              const filter = audioContextRef.current.createBiquadFilter();
+              filter.type = index === 0 ? 'lowshelf' : index === EQ_FREQUENCIES.length - 1 ? 'highshelf' : 'peaking';
+              filter.frequency.value = freq;
+              filter.Q.value = 1.0;
+              filter.gain.value = eqBands[index];
+              return filter;
+            });
+          };
+
+          const connectAudioChain = (source) => {
+            // Connect: source -> filters -> analyser -> destination
+            let currentNode = source;
+            
+            filtersRef.current.forEach(filter => {
+              currentNode.connect(filter);
+              currentNode = filter;
+            });
+            
+            currentNode.connect(analyserRef.current);
+            analyserRef.current.connect(audioContextRef.current.destination);
+          };
+
+          const updateEQBand = (index, value) => {
+            const newBands = [...eqBands];
+            newBands[index] = value;
+            setEqBands(newBands);
+            
+            if (filtersRef.current[index]) {
+              filtersRef.current[index].gain.value = value;
+            }
+          };
+
+          const resetEQ = () => {
+            const resetBands = new Array(10).fill(0);
+            setEqBands(resetBands);
+            filtersRef.current.forEach((filter, index) => {
+              filter.gain.value = 0;
+            });
           };
 
           const handleFileUpload = (e) => {
@@ -176,8 +226,7 @@
               }
               
               sourceRef.current = audioContextRef.current.createMediaElementSource(audioElementRef.current);
-              sourceRef.current.connect(analyserRef.current);
-              analyserRef.current.connect(audioContextRef.current.destination);
+              connectAudioChain(sourceRef.current);
               
               audioElementRef.current.play();
               setIsPlaying(true);
@@ -208,7 +257,7 @@
                 }
                 
                 sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
-                sourceRef.current.connect(analyserRef.current);
+                connectAudioChain(sourceRef.current);
                 
                 setIsMicActive(true);
                 setIsPlaying(true);
@@ -388,6 +437,47 @@
 
                   {showSettings && (
                     <div className="bg-white/5 rounded-lg p-6 space-y-6 border border-white/10">
+                      <div>
+                        <div className="flex justify-between items-center mb-3">
+                          <label className="text-white text-sm font-medium">
+                            Equalizer
+                          </label>
+                          <button
+                            onClick={resetEQ}
+                            className="text-xs text-gray-400 hover:text-white transition-colors"
+                          >
+                            Reset EQ
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-5 md:grid-cols-10 gap-4">
+                          {EQ_FREQUENCIES.map((freq, index) => (
+                            <div key={freq} className="flex flex-col items-center">
+                              <input
+                                type="range"
+                                min="-12"
+                                max="12"
+                                step="0.5"
+                                value={eqBands[index]}
+                                onChange={(e) => updateEQBand(index, parseFloat(e.target.value))}
+                                className="w-full h-24 bg-white/20 rounded-lg appearance-none cursor-pointer accent-purple-500 vertical-slider"
+                                style={{
+                                  writingMode: 'bt-lr',
+                                  WebkitAppearance: 'slider-vertical',
+                                  width: '8px',
+                                  height: '96px'
+                                }}
+                              />
+                              <span className="text-xs text-gray-400 mt-2">
+                                {freq < 1000 ? freq : `${freq/1000}k`}
+                              </span>
+                              <span className="text-xs text-white mt-1">
+                                {eqBands[index] > 0 ? '+' : ''}{eqBands[index].toFixed(1)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
                       <div>
                         <label className="text-white block mb-2 text-sm font-medium">
                           Sensitivity: {sensitivity.toFixed(1)}x
